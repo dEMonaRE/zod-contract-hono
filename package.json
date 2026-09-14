@@ -1,6 +1,6 @@
 {
   "name": "@aemrezorlu/zod-contract-hono",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "zod-contract plugin: derive OpenAPI paths from a Hono app's route table.",
   "type": "module",
   "main": "./dist/index.js",
@@ -12,6 +12,22 @@
     }
   },
   "license": "MIT",
+  "keywords": [
+    "zod",
+    "openapi",
+    "hono",
+    "routing",
+    "typescript",
+    "zod-contract"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/dEMonaRE/zod-contract-hono.git"
+  },
+  "bugs": {
+    "url": "https://github.com/dEMonaRE/zod-contract-hono/issues"
+  },
+  "homepage": "https://github.com/dEMonaRE/zod-contract-hono#readme",
   "files": [
     "dist",
     "README.md"
@@ -21,7 +37,7 @@
     "test": "vitest run"
   },
   "peerDependencies": {
-    "@aemrezorlu/zod-contract": "^0.1.0",
+    "@aemrezorlu/zod-contract": "^0.2.0",
     "hono": "^4.0.0"
   },
   "dependencies": {
