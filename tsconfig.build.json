@@ -1,0 +1,13 @@
+{
+  "extends": "../zod-contract/tsconfig.build.json",
+  "compilerOptions": {
+    "rootDir": "src",
+    "outDir": "dist",
+    "declaration": true,
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "target": "ES2022"
+  },
+  "include": ["src/**/*"],
+  "exclude": ["test", "fixtures", "node_modules", "dist"]
+}
