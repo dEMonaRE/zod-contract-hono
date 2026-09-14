@@ -26,6 +26,7 @@ import {
   type OpenAPISchema,
   type Plugin,
 } from '@aemrezorlu/zod-contract'
+import { findInlineValidators } from './zvalidator-walker.js'
 
 const METHODS = ['get', 'post', 'put', 'patch', 'delete', 'options', 'head'] as const
 
@@ -59,13 +60,34 @@ export function honoPlugin(opts: HonoPluginOptions): Plugin {
       if (routes.length === 0) return ctx
 
       // Build route-file index if routesDir is given
-      const fileIndex = opts.routesDir ? await buildFileIndex(path.resolve(opts.routesDir)) : new Map<string, Record<string, unknown>>()
+      const routesDir = opts.routesDir ? path.resolve(opts.routesDir) : undefined
+      const fileIndex = routesDir ? await buildFileIndex(routesDir) : new Map<string, Record<string, unknown>>()
+      const filePathIndex = routesDir ? await buildFilePathIndex(routesDir) : new Map<string, Record<string, string>>()
+
+      const jiti = createJiti(routesDir ?? path.dirname(appPath), { interopDefault: true, moduleCache: false })
 
       const paths: Record<string, Record<string, OpenAPISchema>> = {}
       for (const r of routes) {
         const fileKey = r.path
         const fileMod = fileIndex.get(fileKey)?.[r.method] ?? fileIndex.get(fileKey)
-        const operation: OpenAPISchema = buildOperation(r, fileMod)
+        const filePath = filePathIndex.get(fileKey)?.[r.method]
+
+        // Resolution order: inline AST walker > named exports (query/body/response).
+        const inline = filePath ? await augmentWithInlineValidators(r, fileMod, filePath, jiti) : null
+        let operation: OpenAPISchema = inline ?? buildOperation(r, fileMod)
+
+        // If only AST-filled, layer basic path params from the route path itself.
+        if (inline) {
+          const params: OpenAPIParameter[] = []
+          for (const m of r.path.matchAll(/:(\w+)/g)) {
+            params.push({ name: m[1]!, in: 'path', required: true, schema: { type: 'string' } })
+          }
+          const existingParams = (operation.parameters ?? []) as unknown as OpenAPIParameter[]
+          const existingPathNames = new Set(existingParams.filter((p) => p.in === 'path').map((p) => p.name))
+          for (const p of params) if (!existingPathNames.has(p.name)) existingParams.push(p)
+          if (existingParams.length > 0) operation.parameters = existingParams as unknown as OpenAPISchema[]
+        }
+
         const entry = paths[r.path] ?? {}
         entry[r.method] = operation
         paths[r.path] = entry
@@ -135,6 +157,63 @@ async function buildFileIndex(routesDir: string): Promise<Map<string, Record<str
   return index
 }
 
+async function augmentWithInlineValidators(
+  route: ExtractedRoute,
+  methodMod: unknown,
+  filePath: string | undefined,
+  jiti: ReturnType<typeof createJiti>,
+): Promise<OpenAPISchema | null> {
+  if (!filePath) return null
+  const validators = await findInlineValidators(filePath)
+  if (validators.length === 0) return null
+
+  // Resolve schema refs via the jiti-loaded module exports.
+  // jiti already cached the load; we re-load directly to grab the export map.
+  const mod = jiti(filePath) as Record<string, unknown>
+
+  // Pick validators that mention the exported schema names of this route's file,
+  // and that are *not* already wired by exports (we layer them on top, exports win to keep tests stable).
+  const op: OpenAPISchema = {}
+
+  for (const v of validators) {
+    const schema = mod[v.schemaName]
+    if (!isZod(schema)) continue
+    const z = schema as ZodTypeAny
+    if (v.target === 'json' || v.target === 'form') {
+      op.requestBody = {
+        required: true,
+        content:
+          v.target === 'form'
+            ? { 'multipart/form-data': { schema: zodToOpenAPI({ name: 'Body', zod: z, file: '' }) } }
+            : { 'application/json': { schema: zodToOpenAPI({ name: 'Body', zod: z, file: '' }) } },
+      }
+    } else {
+      // query / param / header / cookie → parameters
+      const converted = zodToOpenAPI({ name: 'Params', zod: z, file: '' })
+      const properties = (converted.properties ?? {}) as Record<string, OpenAPISchema>
+      const required = (converted.required as string[] | undefined) ?? []
+      const params: OpenAPIParameter[] = []
+      const inLoc = v.target === 'param' ? 'path' : (v.target as 'query' | 'header' | 'cookie')
+      // Path-level :name hints override schema for path params
+      const pathHints = new Set<string>()
+      for (const m of route.path.matchAll(/:(\w+)/g)) pathHints.add(m[1]!)
+      for (const [name, schema] of Object.entries(properties)) {
+        params.push({ name, in: inLoc, required: inLoc === 'path' ? true : required.includes(name), schema })
+      }
+      // Attach path params from route path even if no zValidator('param', ...) was used
+      for (const hint of pathHints) {
+        if (!params.find((p) => p.name === hint && p.in === 'path')) {
+          params.push({ name: hint, in: 'path', required: true, schema: { type: 'string' } })
+        }
+      }
+      // ponytail: dropping already-present exports of the same target/in-pair would need merging — accept duplicates for v0.2 (emitting both is legal in OpenAPI)
+      op.parameters = params as unknown as OpenAPISchema[]
+    }
+  }
+
+  return Object.keys(op).length > 0 ? op : null
+}
+
 function buildOperation(route: ExtractedRoute, mod: unknown): OpenAPISchema {
   const operation: OpenAPISchema = {}
   if (typeof mod !== 'object' || mod === null) return operation
@@ -187,6 +266,42 @@ function buildOperation(route: ExtractedRoute, mod: unknown): OpenAPISchema {
   }
 
   return operation
+}
+
+// File path index: OpenAPI path → { [method]: absolute file path } (for AST walking).
+async function buildFilePathIndex(routesDir: string): Promise<Map<string, Record<string, string>>> {
+  const index = new Map<string, Record<string, string>>()
+  let stat
+  try {
+    stat = await fs.stat(routesDir)
+  } catch {
+    return index
+  }
+  if (!stat.isDirectory()) return index
+
+  const files = await walk(routesDir)
+  const re = new RegExp(`^(.+)\\.(${METHODS.join('|')})\\.ts$`)
+
+  for (const file of files) {
+    const rel = path.relative(routesDir, file).replace(/\\/g, '/')
+    const match = rel.match(re)
+    if (!match) continue
+    const [, rest, method] = match
+    if (!rest || !method) continue
+    const openapiPath = '/' + rest.replace(/\[([^\]]+)\]/g, ':$1')
+    const methodMap = index.get(openapiPath) ?? {}
+    methodMap[method.toLowerCase()] = file
+    index.set(openapiPath, methodMap)
+  }
+  return index
+}
+
+function hasAnyZodExport(mod: unknown): boolean {
+  if (typeof mod !== 'object' || mod === null) return false
+  for (const [, v] of Object.entries(mod as Record<string, unknown>)) {
+    if (isZod(v)) return true
+  }
+  return false
 }
 
 async function walk(dir: string): Promise<string[]> {

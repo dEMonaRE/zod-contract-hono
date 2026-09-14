@@ -11,7 +11,30 @@ query/body/response.
 npm install --save-dev @aemrezorlu/zod-contract-hono hono zod
 ```
 
-Peer deps: `hono` `^4.0.0`, `@aemrezorlu/zod-contract` `^0.1.0`.
+Peer deps: `hono` `^4.0.0`, `@aemrezorlu/zod-contract` `^0.3.0`, `@hono/zod-validator` `^0.4.0` (optional, for inline AST discovery).
+
+## Inline `zValidator()` discovery (v0.2)
+
+When a route file uses `@hono/zod-validator` with an inline schema, the plugin
+walks the file's source via `ts-morph` and wires the validator up automatically:
+
+```ts
+// routes/users.post.ts
+import { z } from 'zod'
+import { zValidator } from '@hono/zod-validator'
+
+export const CreateUser = z.object({ email: z.string().email(), name: z.string() })
+
+export const POST = {
+  validate: zValidator('json', CreateUser),
+  handler: (c) => c.json({ id: 'new' }),
+}
+```
+
+Result: `requestBody.content['application/json'].schema` is filled from `CreateUser`
+— no separate `export const body = ...` needed. Targets supported: `'json'`, `'query'`,
+`'param'`, `'header'`, `'cookie'`, `'form'`. Inline-only schemas (`z.object({...})` passed
+directly) are out of scope — declare them as named exports.
 
 ## Usage
 
