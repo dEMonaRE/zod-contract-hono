@@ -67,6 +67,14 @@ export function honoPlugin(opts: HonoPluginOptions): Plugin {
       const jiti = createJiti(routesDir ?? path.dirname(appPath), { interopDefault: true, moduleCache: false })
 
       const paths: Record<string, Record<string, OpenAPISchema>> = {}
+      const tagByPath = (p: string): string[] | null => {
+        const segs = p.split('/').filter(Boolean)
+        const stemSegs = segs.filter((s) => !s.startsWith(':'))
+        if (stemSegs.length < 2) return null
+        const folder = stemSegs[stemSegs.length - 2]
+        if (!folder || folder.startsWith(':')) return null
+        return [folder]
+      }
       for (const r of routes) {
         const fileKey = r.path
         const fileMod = fileIndex.get(fileKey)?.[r.method] ?? fileIndex.get(fileKey)
@@ -89,6 +97,8 @@ export function honoPlugin(opts: HonoPluginOptions): Plugin {
         }
 
         const entry = paths[r.path] ?? {}
+        const tags = tagByPath(r.path)
+        if (tags) operation.tags = tags
         entry[r.method] = operation
         paths[r.path] = entry
       }
@@ -262,6 +272,11 @@ function buildOperation(route: ExtractedRoute, mod: unknown): OpenAPISchema {
           },
         },
       },
+    }
+    // Tier 1 #2: surface schema.describe() on the operation too
+    const d = (z as { _def?: { description?: unknown } })._def?.description
+    if (typeof d === 'string' && d.length > 0 && !operation.description) {
+      operation.description = d
     }
   }
 
