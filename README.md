@@ -11,7 +11,7 @@ query/body/response.
 npm install --save-dev @aemrezorlu/zod-contract-hono hono zod
 ```
 
-Peer deps: `hono` `^4.0.0`, `@aemrezorlu/zod-contract` `^0.3.0`, `@hono/zod-validator` `^0.4.0` (optional, for inline AST discovery).
+Peer deps: `hono` `^4.0.0`, `@aemrezorlu/zod-contract` `^0.4.0`, `@hono/zod-validator` `^0.4.0` (optional, for inline AST discovery).
 
 ## Inline `zValidator()` discovery (v0.2)
 
@@ -89,6 +89,8 @@ export const response  = z.object({ id: z.string() })
 paths:
   /users:
     get:
+      tags: [users]
+      description: List all users.
       parameters:
         - name: limit
           in: query
@@ -96,8 +98,25 @@ paths:
       responses: ...
   /users:
     post:
+      tags: [users]
       requestBody: ...
 ```
+
+## Tag inference (v0.3)
+
+Tags are inferred from the route path: two-or-more-stem paths get the
+second-to-last non-param segment as the tag.
+
+| Hono path | Tags |
+|---|---|
+| `/users` | `["users"]` |
+| `/admin/users` | `["admin"]` |
+| `/admin/legacy/keys` | `["legacy"]` |
+
+## Description (v0.3)
+
+`Schema.describe('...')` on the response schema is copied to
+`operation.description`.
 
 ## v0.1.0 scope
 
