@@ -1,6 +1,6 @@
 {
   "name": "@aemrezorlu/zod-contract-hono",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "zod-contract plugin: derive OpenAPI paths from a Hono app's route table.",
   "type": "module",
   "main": "./dist/index.js",
